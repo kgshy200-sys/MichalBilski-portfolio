@@ -1,0 +1,683 @@
+<!DOCTYPE html>
+<html lang="pl">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Analiza dokumentów — ekstrakcja AI</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/mammoth@1.8.0/mammoth.browser.min.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --panel: #1a2332;
+      --border: #2d3a4d;
+      --text: #e8eef5;
+      --muted: #8fa3b8;
+      --accent: #3d9cfd;
+      --accent-dim: #2563a8;
+      --ok: #34d399;
+      --warn: #fbbf24;
+    }
+    * { box-sizing: border-box; }
+    body {
+      font-family: "Segoe UI", system-ui, sans-serif;
+      margin: 0;
+      padding: 24px;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.45;
+    }
+    h1 { font-size: 1.35rem; font-weight: 600; margin: 0 0 8px; }
+    .sub { color: var(--muted); font-size: 0.9rem; margin-bottom: 24px; }
+    .grid {
+      display: grid;
+      gap: 20px;
+      grid-template-columns: 1fr 1fr;
+      max-width: 1280px;
+    }
+    @media (max-width: 960px) { .grid { grid-template-columns: 1fr; } }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 18px;
+    }
+    .card h2 {
+      font-size: 1rem;
+      margin: 0 0 12px;
+      color: var(--muted);
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+    label { display: block; font-size: 0.85rem; color: var(--muted); margin-bottom: 6px; }
+    input[type="text"], textarea, select {
+      width: 100%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+      background: var(--bg);
+      color: var(--text);
+      font-size: 0.95rem;
+    }
+    textarea { min-height: 140px; resize: vertical; font-family: ui-monospace, monospace; font-size: 0.85rem; }
+    .drop {
+      border: 2px dashed var(--border);
+      border-radius: 10px;
+      padding: 28px;
+      text-align: center;
+      color: var(--muted);
+      cursor: pointer;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop:hover, .drop.dragover {
+      border-color: var(--accent);
+      background: rgba(61, 156, 253, 0.06);
+    }
+    .drop strong { color: var(--text); }
+    .row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; margin-top: 12px; }
+    button {
+      background: var(--accent);
+      color: #061018;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      font-size: 0.9rem;
+    }
+    button:hover { filter: brightness(1.08); }
+    button.secondary {
+      background: transparent;
+      color: var(--accent);
+      border: 1px solid var(--accent-dim);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; filter: none; }
+    .fields-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.88rem;
+    }
+    .fields-table th, .fields-table td {
+      border: 1px solid var(--border);
+      padding: 8px;
+      text-align: left;
+    }
+    .fields-table th { color: var(--muted); font-weight: 600; }
+    .fields-table input { border: none; background: transparent; }
+    .badge {
+      display: inline-block;
+      padding: 4px 10px;
+      border-radius: 999px;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .badge.ok { background: rgba(52, 211, 153, 0.2); color: var(--ok); }
+    .badge.warn { background: rgba(251, 191, 36, 0.15); color: var(--warn); }
+    .results-wrap { overflow-x: auto; margin-top: 12px; }
+    .results-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+      min-width: 520px;
+    }
+    .results-table th, .results-table td {
+      border: 1px solid var(--border);
+      padding: 10px;
+      text-align: left;
+      vertical-align: top;
+    }
+    .results-table th {
+      background: rgba(61, 156, 253, 0.12);
+      white-space: nowrap;
+    }
+    .results-table tr:nth-child(even) td { background: rgba(255,255,255,0.02); }
+    .api-url { max-width: 280px; }
+    .hint { font-size: 0.8rem; color: var(--muted); margin-top: 8px; }
+    .toolbar { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-top: 14px; }
+    .status-msg { margin-top: 10px; font-size: 0.88rem; color: var(--warn); }
+    .mono { font-family: ui-monospace, monospace; font-size: 0.82rem; }
+  </style>
+</head>
+<body>
+
+<h1>Analiza dokumentów</h1>
+<p class="sub">
+  PDF (PDF.js), TXT, DOC/DOCX (Mammoth), wklejony tekst → konfigurowalne pola → tabela wyników.
+  Model jak w ChatGPT podłączany jest po stronie serwera (OpenAI API + klucz w <span class="mono">.env</span>).
+  Otwórz stronę jako <strong>http://localhost:3001/</strong> po <span class="mono">npm start</span> — bez wpisywania adresu API.
+  Opcja regex działa bez sieci.
+</p>
+
+<div class="grid">
+  <div class="card">
+    <h2>1. Źródło tekstu</h2>
+    <div class="drop" id="dropZone" tabindex="0" role="button" aria-label="Upuść plik">
+      <strong>Przeciągnij plik</strong> lub kliknij — obsługa:
+      <span class="mono">.pdf · .txt · .csv · .md · .docx</span>
+      <div class="hint">CSV i Markdown są wczytywane jako zwykły tekst (UTF-8).</div>
+    </div>
+    <input type="file" id="fileInput" accept=".pdf,.txt,.csv,.md,.docx,application/pdf,text/plain,text/csv" hidden multiple>
+    <div class="row">
+      <span id="loadedFiles" class="muted mono" style="color:var(--muted)"></span>
+    </div>
+    <label for="pasteArea">Lub wklej / edytuj tekst</label>
+    <textarea id="pasteArea" placeholder="Tu pojawi się tekst z pliku lub wklej dokument ręcznie…"></textarea>
+    <div class="toolbar">
+      <button type="button" id="btnAi" class="secondary">Wyciągnij (AI)</button>
+      <button type="button" id="btnRegex">Tylko lokalnie (regex)</button>
+      <button type="button" id="btnClearText" class="secondary">Wyczyść tekst</button>
+    </div>
+    <p class="hint" id="apiRow">
+      <span id="apiAutoHint" style="display:none;">Połączenie z tym samym serwerem — adres API ustawiany automatycznie.</span>
+      <span id="apiManualWrap">
+        URL backendu (tylko przy otwieraniu pliku z dysku):
+        <input class="api-url" type="text" id="apiBase" value="http://localhost:3001" autocomplete="off" />
+      </span>
+      <span id="healthBadge"></span>
+    </p>
+    <div id="statusLine" class="status-msg" aria-live="polite"></div>
+  </div>
+
+  <div class="card">
+    <h2>2. Jakie dane wyciągnąć</h2>
+    <p class="hint">Nazwa pola = kolumna w tabeli. „Wskazówka dla AI” pomaga doprecyzować (np. format daty).</p>
+    <table class="fields-table" id="fieldsTable">
+      <thead>
+        <tr><th>Nazwa pola (klucz JSON)</th><th>Wskazówka dla AI (opcjonalnie)</th><th></th></tr>
+      </thead>
+      <tbody id="fieldsBody"></tbody>
+    </table>
+    <div class="toolbar">
+      <button type="button" id="btnAddField" class="secondary">+ Dodaj pole</button>
+      <button type="button" id="btnResetFields" class="secondary">Domyślne pola</button>
+      <button type="button" id="btnSaveFields" class="secondary">Zapisz w przeglądarce</button>
+    </div>
+  </div>
+</div>
+
+<div class="card" style="max-width:1280px;margin-top:20px;">
+  <h2>3. Wyniki (tabela)</h2>
+  <div class="toolbar">
+    <button type="button" id="btnExportCsv">Eksport CSV</button>
+    <button type="button" id="btnExportJson">Eksport JSON</button>
+    <button type="button" id="btnClearRows" class="secondary">Wyczyść wiersze</button>
+  </div>
+  <div class="results-wrap">
+    <table class="results-table" id="resultsTable">
+      <thead id="resultsHead"></thead>
+      <tbody id="resultsBody"></tbody>
+    </table>
+  </div>
+  <p class="hint" id="emptyHint">Brak wierszy — uruchom ekstrakcję po wczytaniu tekstu.</p>
+</div>
+
+<script>
+(function () {
+  const STORAGE_FIELDS = 'doc_extract_fields_v1';
+  const STORAGE_API = 'doc_extract_api_base_v1';
+
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  const dropZone = document.getElementById('dropZone');
+  const fileInput = document.getElementById('fileInput');
+  const pasteArea = document.getElementById('pasteArea');
+  const loadedFiles = document.getElementById('loadedFiles');
+  const fieldsBody = document.getElementById('fieldsBody');
+  const resultsHead = document.getElementById('resultsHead');
+  const resultsBody = document.getElementById('resultsBody');
+  const emptyHint = document.getElementById('emptyHint');
+  const statusLine = document.getElementById('statusLine');
+  const apiBase = document.getElementById('apiBase');
+  const apiRow = document.getElementById('apiRow');
+  const apiAutoHint = document.getElementById('apiAutoHint');
+  const apiManualWrap = document.getElementById('apiManualWrap');
+  const healthBadge = document.getElementById('healthBadge');
+
+  function isServedOverHttp() {
+    return (
+      window.location.protocol === 'http:' || window.location.protocol === 'https:'
+    );
+  }
+
+  /** Pusty string = ten sam host co strona (np. http://localhost:3001/). */
+  function getApiBaseForFetch() {
+    if (isServedOverHttp()) return '';
+    const v = (apiBase.value || '').trim().replace(/\/$/, '');
+    return v || 'http://localhost:3001';
+  }
+
+  /** @type {{ fileName: string, row: Record<string,string> }[]} */
+  let resultRows = [];
+
+  const defaultFields = [
+    { key: 'kwota', hint: 'Kwota z walutą (np. 1 234,56 PLN)' },
+    { key: 'email', hint: 'Adres e-mail' },
+    { key: 'data', hint: 'Data w dokumencie (jak w tekście)' },
+    { key: 'nip', hint: 'NIP jeśli występuje' },
+    { key: 'numer_faktury', hint: 'Numer faktury lub dokumentu' },
+    { key: 'kontrahent', hint: 'Nazwa kontrahenta / firmy' },
+  ];
+
+  function setStatus(msg, isError) {
+    statusLine.textContent = msg || '';
+    statusLine.style.color = isError ? '#f87171' : 'var(--warn)';
+  }
+
+  function loadStoredApi() {
+    try {
+      const u = localStorage.getItem(STORAGE_API);
+      if (u) apiBase.value = u;
+    } catch (_) {}
+  }
+
+  function saveApi() {
+    try {
+      localStorage.setItem(STORAGE_API, apiBase.value.trim());
+    } catch (_) {}
+  }
+
+  apiBase.addEventListener('change', saveApi);
+
+  function applyApiUiMode() {
+    if (isServedOverHttp()) {
+      apiAutoHint.style.display = 'inline';
+      apiManualWrap.style.display = 'none';
+    } else {
+      apiAutoHint.style.display = 'none';
+      apiManualWrap.style.display = 'inline';
+      loadStoredApi();
+    }
+  }
+
+  async function checkHealth() {
+    const base = getApiBaseForFetch();
+    healthBadge.innerHTML = '';
+    try {
+      const r = await fetch(base + '/api/health', { method: 'GET' });
+      const j = await r.json();
+      if (j.ok && j.ai) {
+        healthBadge.innerHTML = '<span class="badge ok">API + AI</span>';
+      } else if (j.ok) {
+        healthBadge.innerHTML = '<span class="badge warn">API bez klucza AI</span>';
+      }
+    } catch {
+      healthBadge.innerHTML = '<span class="badge warn">Brak połączenia z API</span>';
+    }
+  }
+
+  function renderFieldRows(fields) {
+    fieldsBody.innerHTML = '';
+    fields.forEach((f, idx) => {
+      const tr = document.createElement('tr');
+      tr.innerHTML =
+        '<td><input type="text" data-k="key" placeholder="np. kwota" value="' +
+        escapeAttr(f.key) +
+        '" /></td>' +
+        '<td><input type="text" data-k="hint" placeholder="Opcjonalny opis dla modelu" value="' +
+        escapeAttr(f.hint) +
+        '" /></td>' +
+        '<td><button type="button" class="secondary rm">✕</button></td>';
+      tr.querySelector('.rm').onclick = () => {
+        tr.remove();
+        saveFieldsSoon();
+      };
+      tr.querySelectorAll('input').forEach((inp) => {
+        inp.addEventListener('input', saveFieldsSoon);
+      });
+      fieldsBody.appendChild(tr);
+    });
+  }
+
+  let saveTimer;
+  function saveFieldsSoon() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(saveFieldsToStorage, 400);
+  }
+
+  function getFieldsFromDom() {
+    const out = [];
+    fieldsBody.querySelectorAll('tr').forEach((tr) => {
+      const key = tr.querySelector('[data-k=key]')?.value?.trim() || '';
+      const hint = tr.querySelector('[data-k=hint]')?.value?.trim() || '';
+      if (key) out.push({ key, hint });
+    });
+    return out;
+  }
+
+  function saveFieldsToStorage() {
+    try {
+      localStorage.setItem(STORAGE_FIELDS, JSON.stringify(getFieldsFromDom()));
+    } catch (_) {}
+  }
+
+  function loadFieldsFromStorage() {
+    try {
+      const raw = localStorage.getItem(STORAGE_FIELDS);
+      if (raw) {
+        const arr = JSON.parse(raw);
+        if (Array.isArray(arr) && arr.length) {
+          renderFieldRows(arr);
+          return;
+        }
+      }
+    } catch (_) {}
+    renderFieldRows(defaultFields);
+  }
+
+  function escapeAttr(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/"/g, '&quot;')
+      .replace(/</g, '&lt;');
+  }
+
+  function escapeCsvCell(s) {
+    const t = String(s);
+    if (/[",\n\r]/.test(t)) return '"' + t.replace(/"/g, '""') + '"';
+    return t;
+  }
+
+  document.getElementById('btnAddField').onclick = () => {
+    const tr = document.createElement('tr');
+    tr.innerHTML =
+      '<td><input type="text" data-k="key" placeholder="nowe_pole" /></td>' +
+      '<td><input type="text" data-k="hint" /></td>' +
+      '<td><button type="button" class="secondary rm">✕</button></td>';
+    tr.querySelector('.rm').onclick = () => {
+      tr.remove();
+      saveFieldsSoon();
+    };
+    tr.querySelectorAll('input').forEach((inp) => inp.addEventListener('input', saveFieldsSoon));
+    fieldsBody.appendChild(tr);
+  };
+
+  document.getElementById('btnResetFields').onclick = () => {
+    renderFieldRows(defaultFields);
+    saveFieldsToStorage();
+  };
+
+  document.getElementById('btnSaveFields').onclick = () => {
+    saveFieldsToStorage();
+    setStatus('Zapisano konfigurację pól w localStorage.', false);
+  };
+
+  async function extractPdfText(file) {
+    const buf = await file.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data: buf }).promise;
+    let full = '';
+    for (let i = 1; i <= pdf.numPages; i++) {
+      const page = await pdf.getPage(i);
+      const content = await page.getTextContent();
+      const strings = content.items.map(function (it) {
+        return it.str;
+      });
+      full += strings.join(' ') + '\n';
+    }
+    return full.trim();
+  }
+
+  async function extractDocxText(file) {
+    const buf = await file.arrayBuffer();
+    const res = await mammoth.extractRawText({ arrayBuffer: buf });
+    return (res.value || '').trim();
+  }
+
+  async function extractPlainText(file) {
+    return (await file.text()).trim();
+  }
+
+  async function handleFiles(fileList) {
+    const files = Array.from(fileList || []);
+    if (!files.length) return;
+    setStatus('');
+    const parts = [];
+    for (const file of files) {
+      const name = file.name || 'plik';
+      const lower = name.toLowerCase();
+      let text = '';
+      try {
+        if (lower.endsWith('.pdf')) text = await extractPdfText(file);
+        else if (lower.endsWith('.docx')) text = await extractDocxText(file);
+        else if (
+          lower.endsWith('.txt') ||
+          lower.endsWith('.csv') ||
+          lower.endsWith('.md')
+        )
+          text = await extractPlainText(file);
+        else {
+          setStatus('Nieobsługiwany format: ' + name + ' — pominięto.', true);
+          continue;
+        }
+      } catch (e) {
+        setStatus('Błąd odczytu ' + name + ': ' + e.message, true);
+        continue;
+      }
+      if (!text) {
+        setStatus('Brak tekstu w pliku: ' + name, true);
+        continue;
+      }
+      parts.push('--- ' + name + ' ---\n' + text);
+    }
+    if (parts.length) {
+      pasteArea.value = parts.join('\n\n');
+      loadedFiles.textContent =
+        'Wczytano: ' + files.map(function (f) { return f.name; }).join(', ');
+    }
+  }
+
+  dropZone.addEventListener('click', () => fileInput.click());
+  dropZone.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      fileInput.click();
+    }
+  });
+  ['dragenter', 'dragover'].forEach((ev) => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropZone.classList.add('dragover');
+    });
+  });
+  ['dragleave', 'drop'].forEach((ev) => {
+    dropZone.addEventListener(ev, (e) => {
+      e.preventDefault();
+      dropZone.classList.remove('dragover');
+    });
+  });
+  dropZone.addEventListener('drop', (e) => {
+    handleFiles(e.dataTransfer.files);
+  });
+  fileInput.addEventListener('change', () => handleFiles(fileInput.files));
+
+  document.getElementById('btnClearText').onclick = () => {
+    pasteArea.value = '';
+    loadedFiles.textContent = '';
+    setStatus('');
+  };
+
+  function localRegexExtract(text) {
+    const amount = text.match(/\d[\d\s]*[.,]?\d*\s*(zł|PLN|€|\$)/i);
+    const email = text.match(/[a-zA-Z0-9._+-]+@[a-zA-Z0-9._-]+\.[a-zA-Z0-9._-]+/);
+    const date = text.match(/\d{2}[-./]\d{2}[-./]\d{4}/);
+    const nip = text.match(/\b\d{3}[- ]?\d{3}[- ]?\d{2}[- ]?\d{2}\b/);
+    return {
+      kwota: amount ? amount[0] : '',
+      email: email ? email[0] : '',
+      data: date ? date[0] : '',
+      nip: nip ? nip[0].replace(/\s/g, '') : '',
+      numer_faktury: '',
+      kontrahent: '',
+    };
+  }
+
+  function rebuildResultsTableHeader(keys) {
+    const cols = ['Źródło', 'Metoda'].concat(keys);
+    resultsHead.innerHTML =
+      '<tr>' +
+      cols
+        .map(function (c) {
+          return '<th>' + escapeHtml(c) + '</th>';
+        })
+        .join('') +
+      '</tr>';
+  }
+
+  function escapeHtml(s) {
+    return String(s)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  function renderResults() {
+    const fields = getFieldsFromDom();
+    const keys = fields.map(function (f) { return f.key; });
+    if (!resultRows.length) {
+      resultsHead.innerHTML = '';
+      resultsBody.innerHTML = '';
+      emptyHint.style.display = 'block';
+      return;
+    }
+    emptyHint.style.display = 'none';
+    rebuildResultsTableHeader(keys);
+    resultsBody.innerHTML = '';
+    resultRows.forEach(function (rec, i) {
+      const tr = document.createElement('tr');
+      const cells = [
+        escapeHtml(rec.fileName),
+        escapeHtml(rec.method || ''),
+      ].concat(
+        keys.map(function (k) {
+          return escapeHtml(rec.row[k] ?? '');
+        })
+      );
+      tr.innerHTML = cells.map(function (c) { return '<td>' + c + '</td>'; }).join('');
+      resultsBody.appendChild(tr);
+    });
+  }
+
+  function addResultRow(fileName, method, row) {
+    resultRows.push({ fileName: fileName, method: method, row: row });
+    renderResults();
+  }
+
+  document.getElementById('btnClearRows').onclick = () => {
+    resultRows = [];
+    renderResults();
+  };
+
+  document.getElementById('btnRegex').onclick = () => {
+    const text = pasteArea.value.trim();
+    if (!text) {
+      setStatus('Wklej tekst lub wczytaj plik.', true);
+      return;
+    }
+    const fields = getFieldsFromDom();
+    if (!fields.length) {
+      setStatus('Dodaj co najmniej jedno pole (nawet jeśli regex je częściowo zignoruje).', true);
+      return;
+    }
+    const raw = localRegexExtract(text);
+    const row = {};
+    fields.forEach(function (f) {
+      row[f.key] = raw[f.key] != null ? raw[f.key] : '';
+    });
+    addResultRow(loadedFiles.textContent || 'wklejony tekst', 'regex', row);
+    setStatus('Dodano wiersz (regex — tylko podstawowe wzorce).', false);
+  };
+
+  document.getElementById('btnAi').onclick = async () => {
+    const text = pasteArea.value.trim();
+    const fields = getFieldsFromDom();
+    if (!text) {
+      setStatus('Brak tekstu do analizy.', true);
+      return;
+    }
+    if (!fields.length) {
+      setStatus('Zdefiniuj pola do wyciągnięcia.', true);
+      return;
+    }
+    const base = getApiBaseForFetch();
+    if (!isServedOverHttp()) saveApi();
+    setStatus('Trwa wywołanie AI…', false);
+    document.getElementById('btnAi').disabled = true;
+    try {
+      const r = await fetch(base + '/api/extract', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: text, fields: fields }),
+      });
+      const j = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        throw new Error(j.error || 'HTTP ' + r.status);
+      }
+      addResultRow(
+        loadedFiles.textContent || 'wklejony tekst',
+        'OpenAI',
+        j.data
+      );
+      setStatus('Gotowe.', false);
+      await checkHealth();
+    } catch (e) {
+      setStatus(e.message || String(e), true);
+    } finally {
+      document.getElementById('btnAi').disabled = false;
+    }
+  };
+
+  document.getElementById('btnExportCsv').onclick = () => {
+    const fields = getFieldsFromDom();
+    const keys = fields.map(function (f) { return f.key; });
+    if (!resultRows.length) {
+      setStatus('Brak danych do eksportu.', true);
+      return;
+    }
+    const header = ['zrodlo', 'metoda'].concat(keys);
+    const lines = [header.map(escapeCsvCell).join(',')];
+    resultRows.forEach(function (rec) {
+      const vals = [rec.fileName, rec.method || ''].concat(
+        keys.map(function (k) {
+          return rec.row[k] ?? '';
+        })
+      );
+      lines.push(vals.map(escapeCsvCell).join(','));
+    });
+    downloadBlob(
+      '\uFEFF' + lines.join('\r\n'),
+      'wyniki_ekstrakcji.csv',
+      'text/csv;charset=utf-8'
+    );
+  };
+
+  document.getElementById('btnExportJson').onclick = () => {
+    if (!resultRows.length) {
+      setStatus('Brak danych do eksportu.', true);
+      return;
+    }
+    downloadBlob(
+      JSON.stringify(resultRows, null, 2),
+      'wyniki_ekstrakcji.json',
+      'application/json'
+    );
+  };
+
+  function downloadBlob(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(a.href);
+  }
+
+  applyApiUiMode();
+  loadFieldsFromStorage();
+  checkHealth();
+  setInterval(checkHealth, 20000);
+})();
+</script>
+
+</body>
+</html>
